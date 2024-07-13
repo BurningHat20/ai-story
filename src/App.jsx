@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { generateStory } from "./api/gemini";
-import { generateImage } from "./api/midjourney";
+import { generateImage } from "./api/imageGenerator";
 import { FaBook, FaDownload, FaVolumeUp, FaVolumeMute } from "react-icons/fa";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
@@ -36,15 +36,19 @@ function App() {
   const [title, setTitle] = useState("");
   const [speaking, setSpeaking] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState(null);
   const bookRef = useRef();
   const speechSynthesis = window.speechSynthesis;
   const speechUtterance = useRef(new SpeechSynthesisUtterance());
+  const [rateExceeded, setRateExceeded] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     setStoryParagraphs([]);
     setImages([]);
+    setError(null);
+    setRateExceeded(false);
 
     try {
       const fullStory = await generateStory(
@@ -63,19 +67,29 @@ function App() {
 
       // Generate cover image
       const coverImageUrl = await generateImage(
-        `Create a vivid, artistic book cover image for a story titled "${title}"`
+        `Create a vivid, artistic 3D book cover image for a story titled "${title}"`
       );
       setImages([coverImageUrl]);
 
       // Generate paragraph images
       for (let i = 0; i < paragraphs.length; i++) {
         const imageUrl = await generateImage(
-          `Create a detailed, vivid image for this paragraph: ${paragraphs[i]}`
+          `Create a detailed, vivid 3D image for this paragraph: ${paragraphs[i]}`
         );
         setImages((prevImages) => [...prevImages, imageUrl]);
       }
     } catch (error) {
       console.error("Error generating content:", error);
+      if (error.response && error.response.status === 429) {
+        setRateExceeded(true);
+        setError(
+          "Rate limit exceeded. Please wait a moment before trying again."
+        );
+      } else {
+        setError(
+          "An error occurred while generating the story. Please try again."
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -106,36 +120,43 @@ function App() {
     const pagesContainer = bookRef.current;
     const pages = pagesContainer.children;
 
-    // Wait for all images to load
-    await Promise.all(
-      Array.from(pagesContainer.getElementsByTagName("img")).map(
-        (img) =>
-          new Promise((resolve) => {
-            if (img.complete) {
-              resolve();
-            } else {
-              img.onload = resolve;
-            }
-          })
-      )
-    );
+    try {
+      // Wait for all images to load
+      await Promise.all(
+        Array.from(pagesContainer.getElementsByTagName("img")).map(
+          (img) =>
+            new Promise((resolve) => {
+              if (img.complete) {
+                resolve();
+              } else {
+                img.onload = resolve;
+                img.onerror = resolve; // Also resolve on error to prevent hanging
+              }
+            })
+        )
+      );
 
-    for (let i = 0; i < pages.length; i++) {
-      const page = pages[i];
-      const canvas = await html2canvas(page, {
-        scale: 2,
-        useCORS: true,
-        allowTaint: true,
-      });
-      const imgData = canvas.toDataURL("image/jpeg", 1.0);
+      for (let i = 0; i < pages.length; i++) {
+        const page = pages[i];
+        const canvas = await html2canvas(page, {
+          scale: 2,
+          useCORS: true,
+          allowTaint: true,
+        });
+        const imgData = canvas.toDataURL("image/jpeg", 1.0);
 
-      if (i > 0) pdf.addPage();
+        if (i > 0) pdf.addPage();
 
-      pdf.addImage(imgData, "JPEG", 0, 0, 595, 842);
+        pdf.addImage(imgData, "JPEG", 0, 0, 595, 842);
+      }
+
+      pdf.save("story_book.pdf");
+    } catch (error) {
+      console.error("Error generating PDF:", error);
+      setError("An error occurred while generating the PDF. Please try again.");
+    } finally {
+      setGenerating(false);
     }
-
-    pdf.save("story_book.pdf");
-    setGenerating(false);
   };
 
   return (
@@ -166,6 +187,19 @@ function App() {
           </form>
         </div>
       </div>
+
+      {error && (
+        <div className="mt-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded">
+          {error}
+        </div>
+      )}
+
+      {rateExceeded && (
+        <div className="mt-4 p-4 bg-yellow-100 border border-yellow-400 text-yellow-700 rounded">
+          Rate limit exceeded. Please wait a moment before generating more
+          images.
+        </div>
+      )}
 
       {storyParagraphs.length > 0 && (
         <div ref={bookRef} className="mt-8">
@@ -201,7 +235,10 @@ function App() {
                     src={images[index + 1]}
                     alt={`Illustration for paragraph ${index + 1}`}
                     className="w-full h-full object-contain"
-                    crossOrigin="anonymous"
+                    onError={(e) => {
+                      console.error("Error loading image:", e);
+                      e.target.src = "/path/to/fallback/image.jpg"; // Provide a fallback image
+                    }}
                   />
                 </div>
               )}
