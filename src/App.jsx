@@ -2,8 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { generateStory } from "./api/gemini";
 import { generateImage } from "./api/imageGenerator";
 import { FaBook, FaDownload, FaVolumeUp, FaVolumeMute } from "react-icons/fa";
-import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
+import axios from "axios";
 
 const BookPage = React.forwardRef(({ children, pageNumber, isCover }, ref) => (
   <div
@@ -17,7 +16,11 @@ const BookPage = React.forwardRef(({ children, pageNumber, isCover }, ref) => (
       pageBreakAfter: "always",
     }}
   >
-    <div className={`${isCover ? "absolute inset-0" : "p-8 h-full relative"}`}>
+    <div
+      className={`${
+        isCover ? "absolute inset-0" : "p-8 h-full relative flex flex-col"
+      }`}
+    >
       {children}
       {!isCover && pageNumber && (
         <div className="absolute bottom-4 right-4 text-amber-900 font-serif">
@@ -116,41 +119,24 @@ function App() {
 
   const generatePDF = async () => {
     setGenerating(true);
-    const pdf = new jsPDF("p", "pt", "a4");
-    const pagesContainer = bookRef.current;
-    const pages = pagesContainer.children;
-
     try {
-      // Wait for all images to load
-      await Promise.all(
-        Array.from(pagesContainer.getElementsByTagName("img")).map(
-          (img) =>
-            new Promise((resolve) => {
-              if (img.complete) {
-                resolve();
-              } else {
-                img.onload = resolve;
-                img.onerror = resolve; // Also resolve on error to prevent hanging
-              }
-            })
-        )
+      const response = await axios.post(
+        `${import.meta.env.VITE_BACKEND_URL}/generate-pdf`,
+        {
+          title,
+          paragraphs: storyParagraphs,
+          images,
+        },
+        { responseType: "blob" }
       );
 
-      for (let i = 0; i < pages.length; i++) {
-        const page = pages[i];
-        const canvas = await html2canvas(page, {
-          scale: 2,
-          useCORS: true,
-          allowTaint: true,
-        });
-        const imgData = canvas.toDataURL("image/jpeg", 1.0);
-
-        if (i > 0) pdf.addPage();
-
-        pdf.addImage(imgData, "JPEG", 0, 0, 595, 842);
-      }
-
-      pdf.save("story_book.pdf");
+      const pdfBlob = new Blob([response.data], { type: "application/pdf" });
+      const downloadLink = document.createElement("a");
+      downloadLink.href = URL.createObjectURL(pdfBlob);
+      downloadLink.download = "story_book.pdf";
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      document.body.removeChild(downloadLink);
     } catch (error) {
       console.error("Error generating PDF:", error);
       setError("An error occurred while generating the PDF. Please try again.");
@@ -223,18 +209,15 @@ function App() {
           {/* Content Pages */}
           {storyParagraphs.map((paragraph, index) => (
             <BookPage key={index} pageNumber={index + 1}>
-              <p className="text-amber-900 text-lg leading-relaxed mb-4 font-serif">
+              <p className="text-amber-900 text-lg leading-relaxed mb-4 font-serif flex-shrink-0">
                 {paragraph}
               </p>
               {images[index + 1] && (
-                <div
-                  className="w-full flex-grow bg-amber-100 rounded-lg overflow-hidden border-2 border-amber-900 mt-4"
-                  style={{ height: "500px" }}
-                >
+                <div className="flex-grow flex items-center justify-center overflow-hidden">
                   <img
                     src={images[index + 1]}
                     alt={`Illustration for paragraph ${index + 1}`}
-                    className="w-full h-full object-contain"
+                    className="max-w-full max-h-full object-contain"
                     onError={(e) => {
                       console.error("Error loading image:", e);
                       e.target.src = "/path/to/fallback/image.jpg"; // Provide a fallback image
